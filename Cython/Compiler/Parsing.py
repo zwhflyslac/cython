@@ -2013,6 +2013,10 @@ def p_statement(s, ctx, first_statement = 0):
             if ctx.level not in ('module', 'function', 'class', 'other'):
                 s.error("class definition not allowed here")
             return p_class_statement(s, decorators)
+        elif s.sy == 'rcdef':
+            if ctx.level not in ('module', 'function', 'other'):
+                s.error("rcdef statement not allowed here")
+            return p_rcdef_statement(s, ctx)
         elif s.sy == 'include':
             if ctx.level not in ('module', 'module_pxd'):
                 s.error("include statement not allowed here")
@@ -2817,6 +2821,33 @@ def p_cdef_extern_block(s, pos, ctx):
         include_file = include_file,
         body = body,
         namespace = ctx.namespace)
+
+def p_rcdef_statement(s, ctx):
+    pos = s.position()
+    s.expect('rcdef')
+    captures = []
+    names = set()
+    s.expect('[')
+    while True:
+        if s.sy == ']': break
+        var_pos = s.position()
+        by_ref = False
+        if s.sy == '&':
+            by_ref = True
+            s.next()
+        name = s.systring
+        if name in names:
+            s.error("Cannot capture '%s' twice." % name)
+        names.add(name)
+        var = p_name(s, name = name) if s.sy == 'IDENT' else None
+        s.expect('IDENT')
+        captures.append(Nodes.RawCDefCaptureNode(var_pos, name=name, by_ref=by_ref, value=var))
+        if s.sy == ']': break
+        s.expect(',')
+    s.next()
+    kind, bytes_value, unicode_value = p_cat_string_literal(s)
+    s.expect_newline()
+    return Nodes.RawCDefNode(pos, level = ctx.level, captures = captures, body = unicode_value)
 
 def p_c_enum_definition(s, pos, ctx):
     # s.sy == ident 'enum'
