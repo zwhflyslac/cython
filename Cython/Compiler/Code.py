@@ -1013,6 +1013,7 @@ class GlobalState(object):
         self.num_const_index = {}
         self.py_constants = []
         self.cached_cmethods = {}
+        self.global_id_counter = 0
 
         writer.set_global_state(self)
         self.rootwriter = writer
@@ -1233,6 +1234,10 @@ class GlobalState(object):
         else:
             prefix = Naming.const_prefix
         return "%s%s" % (prefix, name_suffix)
+
+    def new_global_id(self):
+        self.global_id_counter += 1
+        return "%s%d" % (Naming.global_id_prefix, self.global_id_counter)
 
     def get_cached_unbound_method(self, type_cname, method_name, args_count):
         key = (type_cname, method_name, args_count)

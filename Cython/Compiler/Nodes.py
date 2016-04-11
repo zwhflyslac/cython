@@ -4217,6 +4217,142 @@ class OverrideCheckNode(StatNode):
         code.funcstate.release_temp(func_node_temp)
         code.putln("}")
 
+#CAUTION: take care of these things:
+#function type
+#array type
+#reference type
+#const type
+#PyObjectType
+class RawCDefCaptureNode(Node):
+    #name
+    #by_ref
+    #value
+    #temp_type
+    #pointer_type
+    #temp_var
+    #pointer_var
+    child_attrs = ["value"]
+    # Not need this. Since we never declare names that wasn't seen before, we simply assume those names nonlocal or global, just like this:
+    # def f():
+    #  cdef int a = 0
+    #  def g():
+    #   #nonlocal a # not need
+    #   (&a)[0] = 1
+    #  return g
+    #def analyse_declarations(self, env):
+    #    if self.by_ref:
+    #        if not env.lookup_here(self.name):#enclosing or global(non-module-level) or __builtins__
+    #            error(self.value.pos, "Not support capturing non-local or built-in variable by reference. Maybe you need declare it 'global' or 'nonlocal'.")
+    def analyse_expressions(self, env):
+        from .ExprNodes import AmpersandNode
+        self.value = self.value.analyse_expressions(env) # if not exist, 'analyse_expressions' would consider it built-in, and generate a warning or an error
+        var_type = self.value.type if not self.value.type.is_reference else self.value.ref_base_type # drop cppreference
+        if var_type.is_const and var_type.const_base_type.is_array: # 'T (const)[N]...[M]' is '(T (const)...[M]) [N]' # TODO: type manipulation should reside in PyrexTypes.py
+            var_type = var_type.const_base_type # array
+            if not var_type.base_type.is_const:
+                var_type = PyrexTypes.CArrayType(PyrexTypes.CConstType(var_type.base_type), var_type.size)
+        take_address = False
+        if self.by_ref:
+            if self.value.type.is_pyobject:
+                error(self.value.pos, "Not support capturing Python object by reference, yet.")
+            take_address = True
+            captured_type = var_type
+        else:
+            self.temp_type = var_type if not var_type.is_const else var_type.const_base_type # note: temp_type can be PyObjectType
+            if self.temp_type.is_cfunction or self.temp_type.is_array:
+                self.temp_type = PyrexTypes.CPtrType(self.temp_type)
+                take_address = True
+            captured_type = PyrexTypes.CConstType(self.temp_type)
+        self.pointer_type = PyrexTypes.CPtrType(captured_type)
+        if take_address:
+            self.value = AmpersandNode(self.pos, operand=self.value)
+            self.value = self.value.analyse_expressions(env)
+        return self
+
+class RawCDefNode(StatNode):
+    #body
+    child_attrs = ["captures"]
+    supported_levels = ('module', 'function', 'other')
+    # Not need. See 'RawCDefCaptureNode.analyse_declarations'.
+    #def analyse_declarations(self, env):
+    #    for capture in self.captures: capture.analyse_declarations(env)
+    def analyse_expressions(self, env):
+        if self.level not in self.supported_levels:
+            error(self.pos, "Error: rcdef statement must be in one of these levels %s, but the current level is '%s'" % (str(self.supported_levels), self.level))
+        if self.level == 'other': self.level = 'function'
+        self.captures = [capture.analyse_expressions(env) for capture in self.captures]
+        return self
+    def generate_code(self, code, phase): # Note: called twice
+        def generate_comment_on_capture(op_str, capture):
+            code.putln("/* capture: %s '%s' (by%s) */" % (op_str, capture.name, 'ref' if capture.by_ref else 'val'))
+
+        # declare t/p
+        if self.level == 'module' and phase == 'definition':
+            code.putln("/* setup for 'rcdef' */")
+            for capture in self.captures:
+                generate_comment_on_capture('capture', capture)
+                if not capture.by_ref:
+                    capture.temp_var = code.globalstate.new_global_id()
+                    code.putln("static %s; /* t, assigned in init process */" % (capture.temp_type.declaration_code(capture.temp_var)))
+                capture.pointer_var = code.globalstate.new_global_id()
+                code.putln("static %s = 0; /* p, assigned in init process */" % (capture.pointer_type.declaration_code(capture.pointer_var)))
+            code.putln("")
+        if self.level == 'function' and phase == 'execution':
+            for capture in self.captures:
+                if not capture.by_ref:
+                    capture.temp_var = code.funcstate.allocate_temp(capture.temp_type, False)
+                capture.pointer_var = code.funcstate.allocate_temp(capture.pointer_type, False)
+
+        # assign t/p
+        if phase == 'execution':
+            for capture in self.captures: # note: exception may happen
+                generate_comment_on_capture('capture', capture)
+                capture.value.generate_evaluation_code(code)
+                if capture.by_ref:
+                    pointer_value = capture.value.result()
+                else:
+                    code.putln("%s = %s; /* t = v */" % (capture.temp_var, capture.value.result()))
+                    pointer_value = "&%s" % capture.temp_var
+                code.putln("%s = %s; /* p = &v or p = &t */" % (capture.pointer_var, pointer_value))
+            code.putln("")
+
+        # define, body, undef
+        if (self.level == 'function' and phase == 'execution') or (self.level == 'module' and phase == 'definition'):
+            for capture in self.captures: # note: exception may happen
+                code.putln("#define %s (*%s) /* #define v (*p) */" % (capture.name, capture.pointer_var))
+            code.putln("")
+            code.putln("/* body: */")
+            code.putln(self.body) # note: no exception allowed
+            code.putln("")
+            code.putln("/* clean out the scene: */")
+            for capture in self.captures:
+                code.putln("#undef %s" % capture.name)
+            code.putln("")
+
+        # release temps
+        if self.level == 'function' and phase == 'execution':
+            for capture in self.captures:
+                generate_comment_on_capture('release', capture)
+                if not capture.by_ref:
+                    #not setting temp_var to null, 'cause we don't know the type, and we don't care the value anymore
+                    code.funcstate.release_temp(capture.temp_var)
+                code.putln("%s = 0; /* p = 0 */" % capture.pointer_var) # pointer_var is always a pointer, so it's safe to assign 0 to it
+                code.funcstate.release_temp(capture.pointer_var)
+                capture.value.generate_disposal_code(code)
+                capture.value.free_temps(code)
+            code.putln("")
+        if self.level == 'module' and phase == 'execution':
+            for capture in self.captures:
+                generate_comment_on_capture('finish', capture)
+                # objects/temps are used globally, so they are not freed
+                capture.value.generate_post_assignment_code(code)
+                capture.value.free_temps(code)
+            code.putln("")
+    def generate_function_definitions(self, env, code):
+        self.generate_code(code, 'definition')
+    def generate_execution_code(self, code):
+        self.generate_code(code, 'execution')
+
 
 class ClassDefNode(StatNode, BlockNode):
     pass
