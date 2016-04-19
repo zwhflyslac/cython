@@ -1872,6 +1872,8 @@ def p_simple_statement(s, first_statement = 0):
         node = p_assert_statement(s)
     elif s.sy == 'pass':
         node = p_pass_statement(s)
+    elif s.sy == 'rcdef':
+        node = p_rcdef_statement(s)
     else:
         node = p_expression_or_assignment(s)
     return node
@@ -2013,8 +2015,6 @@ def p_statement(s, ctx, first_statement = 0):
             if ctx.level not in ('module', 'function', 'class', 'other'):
                 s.error("class definition not allowed here")
             return p_class_statement(s, decorators)
-        elif s.sy == 'rcdef':
-            return p_rcdef_statement(s)
         elif s.sy == 'include':
             if ctx.level not in ('module', 'module_pxd'):
                 s.error("include statement not allowed here")
@@ -2844,7 +2844,6 @@ def p_rcdef_statement(s):
         s.expect(',')
     s.next()
     kind, bytes_value, unicode_value = p_cat_string_literal(s)
-    s.expect_newline()
     return Nodes.RawCDefNode(pos, captures = captures, body = unicode_value)
 
 def p_c_enum_definition(s, pos, ctx):
