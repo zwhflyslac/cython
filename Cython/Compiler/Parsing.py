@@ -2014,9 +2014,7 @@ def p_statement(s, ctx, first_statement = 0):
                 s.error("class definition not allowed here")
             return p_class_statement(s, decorators)
         elif s.sy == 'rcdef':
-            if ctx.level not in ('module', 'function', 'other'):
-                s.error("rcdef statement not allowed here")
-            return p_rcdef_statement(s, ctx)
+            return p_rcdef_statement(s)
         elif s.sy == 'include':
             if ctx.level not in ('module', 'module_pxd'):
                 s.error("include statement not allowed here")
@@ -2822,7 +2820,7 @@ def p_cdef_extern_block(s, pos, ctx):
         body = body,
         namespace = ctx.namespace)
 
-def p_rcdef_statement(s, ctx):
+def p_rcdef_statement(s):
     pos = s.position()
     s.expect('rcdef')
     captures = []
@@ -2847,7 +2845,7 @@ def p_rcdef_statement(s, ctx):
     s.next()
     kind, bytes_value, unicode_value = p_cat_string_literal(s)
     s.expect_newline()
-    return Nodes.RawCDefNode(pos, level = ctx.level, captures = captures, body = unicode_value)
+    return Nodes.RawCDefNode(pos, captures = captures, body = unicode_value)
 
 def p_c_enum_definition(s, pos, ctx):
     # s.sy == ident 'enum'

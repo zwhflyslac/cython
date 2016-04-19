@@ -280,6 +280,7 @@ class Scope(object):
     # is_passthrough    boolean            Outer scope is passed directly
     # is_cpp_class_scope  boolean          Is a C++ class scope
     # is_property_scope boolean            Is a extension type property scope
+    # is_local_scope    boolean            Is a local scope
     # scope_prefix      string             Disambiguator for C names
     # in_cinclude       boolean            Suppress C declaration code
     # qualified_name    string             "modname" or "modname.classname"
@@ -297,6 +298,7 @@ class Scope(object):
     is_cpp_class_scope = 0
     is_property_scope = 0
     is_module_scope = 0
+    is_local_scope = 0
     is_internal = 0
     scope_prefix = ""
     in_cinclude = 0
@@ -1558,6 +1560,8 @@ class ModuleScope(Scope):
 
 
 class LocalScope(Scope):
+
+    is_local_scope = 1
 
     # Does the function have a 'with gil:' block?
     has_with_gil_block = False

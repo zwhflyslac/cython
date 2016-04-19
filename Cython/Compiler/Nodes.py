@@ -4270,15 +4270,18 @@ class RawCDefCaptureNode(Node):
 
 class RawCDefNode(StatNode):
     #body
+    #scope
     child_attrs = ["captures"]
-    supported_levels = ('module', 'function', 'other')
-    # Not need. See 'RawCDefCaptureNode.analyse_declarations'.
-    #def analyse_declarations(self, env):
-    #    for capture in self.captures: capture.analyse_declarations(env)
+    def analyse_declarations(self, env):
+        if env.is_module_scope:
+            self.scope = "module"
+        elif env.is_local_scope:
+            self.scope = "local"
+        else:
+            error(self.pos, "Not support 'rcdef' in any scope other than module scope or local scope.")
+        #Not need. See 'RawCDefCaptureNode.analyse_declarations'.
+        #for capture in self.captures: capture.analyse_declarations(env)
     def analyse_expressions(self, env):
-        if self.level not in self.supported_levels:
-            error(self.pos, "Error: rcdef statement must be in one of these levels %s, but the current level is '%s'" % (str(self.supported_levels), self.level))
-        if self.level == 'other': self.level = 'function'
         self.captures = [capture.analyse_expressions(env) for capture in self.captures]
         return self
     def generate_code(self, code, phase): # Note: called twice
@@ -4286,7 +4289,7 @@ class RawCDefNode(StatNode):
             code.putln("/* capture: %s '%s' (by%s) */" % (op_str, capture.name, 'ref' if capture.by_ref else 'val'))
 
         # declare t/p
-        if self.level == 'module' and phase == 'definition':
+        if self.scope == 'module' and phase == 'definition':
             code.putln("/* setup for 'rcdef' */")
             for capture in self.captures:
                 generate_comment_on_capture('capture', capture)
@@ -4296,7 +4299,7 @@ class RawCDefNode(StatNode):
                 capture.pointer_var = code.globalstate.new_global_id()
                 code.putln("static %s = 0; /* p, assigned in init process */" % (capture.pointer_type.declaration_code(capture.pointer_var)))
             code.putln("")
-        if self.level == 'function' and phase == 'execution':
+        if self.scope == 'local' and phase == 'execution':
             for capture in self.captures:
                 if not capture.by_ref:
                     capture.temp_var = code.funcstate.allocate_temp(capture.temp_type, False)
@@ -4316,7 +4319,7 @@ class RawCDefNode(StatNode):
             code.putln("")
 
         # define, body, undef
-        if (self.level == 'function' and phase == 'execution') or (self.level == 'module' and phase == 'definition'):
+        if (self.scope == 'local' and phase == 'execution') or (self.scope == 'module' and phase == 'definition'):
             for capture in self.captures: # note: exception may happen
                 code.putln("#define %s (*%s) /* #define v (*p) */" % (capture.name, capture.pointer_var))
             code.putln("")
@@ -4329,7 +4332,7 @@ class RawCDefNode(StatNode):
             code.putln("")
 
         # release temps
-        if self.level == 'function' and phase == 'execution':
+        if self.scope == 'local' and phase == 'execution':
             for capture in self.captures:
                 generate_comment_on_capture('release', capture)
                 if not capture.by_ref:
@@ -4340,7 +4343,7 @@ class RawCDefNode(StatNode):
                 capture.value.generate_disposal_code(code)
                 capture.value.free_temps(code)
             code.putln("")
-        if self.level == 'module' and phase == 'execution':
+        if self.scope == 'module' and phase == 'execution':
             for capture in self.captures:
                 generate_comment_on_capture('finish', capture)
                 # objects/temps are used globally, so they are not freed
